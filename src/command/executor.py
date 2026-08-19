@@ -35,6 +35,7 @@ class CommandExecutor:
         permission_manager: Any,
         resend_handler: Optional[Callable[[str, Optional[str], bool], int]] = None,
         send_status_provider: Optional[Callable[[], Dict[str, Any]]] = None,
+        add_send_pending_count: Optional[Callable[[int], None]] = None,
     ) -> None:
         """
         初始化命令执行器
@@ -48,6 +49,7 @@ class CommandExecutor:
             permission_manager: 权限管理器实例
             resend_handler: 重发断线留存文件的处理函数，入参(user_id, group_id, private)，返回重发数量
             send_status_provider: 获取文件发送队列状态的函数，返回包含running等字段的字典
+            add_send_pending_count: 增加/减少尚未入队的批次余量计数
         """
         self.message_sender = message_sender
         self.file_sender = file_sender
@@ -57,6 +59,7 @@ class CommandExecutor:
         self.permission_manager = permission_manager
         self.resend_handler = resend_handler
         self.send_status_provider = send_status_provider
+        self._add_send_pending_count = add_send_pending_count
         self.command_parser = CommandParser()
         self.logger = logger
         self.SELF_ID: Optional[str] = None
@@ -328,6 +331,19 @@ class CommandExecutor:
             response += f"  ... 还有 {len(manga_ids) - 10} 个\n"
         self.message_sender(user_id, response, group_id, private)
 
+        # 统计待发送文件总数，预登记到批次余量
+        if self._add_send_pending_count:
+            total_files = 0
+            for manga_id in manga_ids:
+                if manga_id in self.download_manager.downloading_mangas:
+                    continue
+                pdf_paths = find_manga_pdf(
+                    str(self.config["MANGA_DOWNLOAD_PATH"]), manga_id
+                )
+                if pdf_paths:
+                    total_files += len(pdf_paths)
+            self._add_send_pending_count(total_files)
+
         batch_size = int(self.config.get("FILE_SEND_BATCH_SIZE", 10))
         results: List[Tuple[str, bool, str]] = []
         file_count = 0
@@ -575,8 +591,9 @@ class CommandExecutor:
 
         status = self.send_status_provider()
         running = bool(status.get("running", False))
-        queue_size = int(status.get("queue_size", 0))
+        total = int(status.get("queue_size", 0))
         current_file = status.get("current_file")
+        pending = total - 1 if current_file else total
 
         response = "📊 当前发送队列状态 📊\n\n"
 
@@ -587,13 +604,12 @@ class CommandExecutor:
 
         response += "\n"
 
-        if queue_size > 0:
-            response += f"📋 队列等待: {queue_size} 个文件\n"
+        if pending > 0:
+            response += f"📋 队列等待: {pending} 个文件\n"
         else:
             response += "✅ 当前没有待发送的文件\n"
 
         response += "\n"
-        total = queue_size + (1 if current_file else 0)
         response += f"📝 总任务数: {total}\n"
         response += f"📌 队列状态: {'运行中' if running else '已停止'}\n"
         response += "\n💡 提示: 发送任务将按顺序执行，请耐心等待"
