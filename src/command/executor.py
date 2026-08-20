@@ -421,14 +421,33 @@ class CommandExecutor:
                 return
 
             total_size = sum(size for _, size in pdf_files)
-            manga_blocks = [
-                f"  {i + 1}. {name} ({size} MB)"
-                for i, (name, size) in enumerate(pdf_files)
-            ]
+
+            # 按漫画ID分组，多章节合并显示
+            grouped: Dict[str, List[Tuple[str, float]]] = {}
+            for name, size in pdf_files:
+                manga_id = name.split("-", 1)[0]
+                grouped.setdefault(manga_id, []).append((name, size))
+
+            manga_blocks = []
+            for index, (manga_id, files) in enumerate(grouped.items(), 1):
+                if len(files) == 1:
+                    name, size = files[0]
+                    manga_blocks.append(f"  {index}. {name} ({size} MB)")
+                else:
+                    total = sum(size for _, size in files)
+                    first_name = files[0][0]
+                    manga_blocks.append(
+                        f"  {index}. {first_name}"
+                        f"（共{len(files)}章）（总大小 {total} MB）"
+                    )
+
             pages = paginate_blocks(manga_blocks, "📚 已下载的漫画列表")
             for i, page in enumerate(pages):
                 if i == len(pages) - 1:
-                    page += f"\n\n总计：{len(pdf_files)} 个漫画PDF文件，总大小：{total_size} MB"
+                    page += (
+                        f"\n\n总计：{len(grouped)} 个漫画，"
+                        f"共 {len(pdf_files)} 个PDF文件，总大小：{total_size} MB"
+                    )
                 self.message_sender(user_id, page, group_id, private)
                 if i < len(pages) - 1:
                     time.sleep(0.325)
